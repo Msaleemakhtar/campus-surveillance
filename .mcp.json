@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "colab-proxy-mcp": {
+      "command": "/home/salim/.local/bin/colab-mcp",
+      "args": [],
+      "timeout": 30000
+    }
+  }
+}

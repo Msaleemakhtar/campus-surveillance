@@ -1,0 +1,32 @@
+# Large data — never commit
+videos/
+datasets/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+.env
+*.egg-info/
+dist/
+build/
+
+# UV
+.uv/
+
+# YOLO model weights (auto-downloaded on first run)
+*.pt
+*.onnx
+
+# InsightFace cache
+~/.insightface/
+
+# Node
+frontend/node_modules/
+frontend/.next/
+
+# Misc
+*.log
+.DS_Store
+skills-lock.json
