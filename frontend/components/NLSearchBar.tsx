@@ -117,8 +117,8 @@ export function NLSearchBar() {
       {/* Empty state */}
       {!searched && !loading && (
         <div className="flex-1 flex flex-col items-center justify-center text-center gap-2">
-          <p className="text-slate-400 text-sm">Type a description of what you&apos;re looking for.</p>
-          <p className="text-slate-300 text-xs">
+          <p className="text-slate-700 text-base font-medium">Type a description of what you&apos;re looking for.</p>
+          <p className="text-slate-500 text-sm">
             CLIP matches frame content semantically — no exact keywords needed.
           </p>
         </div>

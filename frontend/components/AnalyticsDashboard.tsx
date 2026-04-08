@@ -95,7 +95,7 @@ export function AnalyticsDashboard() {
         {/* Heatmap — keeps its own dark bg so inferno colors pop */}
         <div
           className="rounded-xl border border-slate-200 shadow-sm relative flex-1 overflow-hidden"
-          style={{ background: "#0b1424", minHeight: 240 }}
+          style={{ background: "#0b1424", minHeight: 204, maxWidth: "85%" }}
         >
           {/* Quadrant dividers */}
           <div className="absolute inset-0 pointer-events-none">
