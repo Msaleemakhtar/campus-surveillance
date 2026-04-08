@@ -112,11 +112,10 @@ export function useAnalyticsFeed() {
   }, [])
 
   const summary: AnalyticsSummary = (() => {
-    let visitor_count = 0, authorized = 0, unknown = 0, cameras_active = 0
+    let visitor_count = 0, authorized = 0, unknown = 0
     const camera_tracks: Record<string, TrackPoint[]> = {}
 
     for (const [camId, msg] of Object.entries(cameraMessages)) {
-      if (msg.tracks.length > 0) cameras_active++
       const points: TrackPoint[] = []
       for (const t of msg.tracks) {
         visitor_count++
@@ -128,7 +127,7 @@ export function useAnalyticsFeed() {
       camera_tracks[camId] = points
     }
 
-    return { visitor_count, authorized, unknown, cameras_active, camera_tracks }
+    return { visitor_count, authorized, unknown, cameras_active: Object.keys(cameraMessages).length, camera_tracks }
   })()
 
   return { summary, incidents, connected: Object.keys(cameraMessages).length > 0 }

@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     AFTER_HOURS_END: int = 6
 
     VIDEOS_BASE: str = "/home/salim/Desktop/campus-survelliance/videos"
+    FRAME_STORE: str = "/home/salim/Desktop/campus-surveillance/backend/frame_store"
 
     # Alert cooldowns (seconds) — how often the same alert type can fire per track
     ALERT_COOLDOWN_LOITERING: float = 60.0

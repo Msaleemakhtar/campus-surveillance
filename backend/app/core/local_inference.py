@@ -86,6 +86,12 @@ _sub_lock = threading.Lock()
 _alert_history: deque[dict] = deque(maxlen=200)
 _alert_history_lock = threading.Lock()
 
+# ── Frame embed slots (Phase 8 — CLIP search) ─────────────────────────────────
+# One slot per camera (overwrite semantics — worker always sees freshest frame).
+_frame_embed_slots: dict[str, tuple[str, np.ndarray]] = {}   # cam_id → (timestamp, frame)
+_frame_embed_lock = threading.Lock()
+_frame_embed_event = threading.Event()
+
 
 def add_subscriber(cam_id: str) -> None:
     with _sub_lock:
@@ -334,8 +340,10 @@ class _PersonReIDMatcher:
             "ViT-B-32", pretrained="openai"
         )
         model.eval()
-        self._encoder = model.visual   # image encoder only — no text needed
+        self._model = model            # full model — needed for text encoding (Phase 8)
+        self._encoder = model.visual   # image encoder shortcut for re-ID crops
         self._preprocess = preprocess
+        self._tokenizer = open_clip.get_tokenizer("ViT-B-32")
         self._db: list[tuple[str, np.ndarray]] = []
         self._lock = threading.Lock()
         self._build_db()
@@ -346,15 +354,16 @@ class _PersonReIDMatcher:
     def _fetch_rows() -> list[tuple[str, np.ndarray]]:
         """
         Synchronously fetch (name, face_embedding) from registered_faces.
-        Uses asyncio.run() — safe in a daemon worker thread with no event loop.
+        Uses asyncio.run() in a daemon worker thread — WorkerAsyncSessionLocal
+        uses NullPool so connections are not bound to the FastAPI event loop.
         """
         import asyncio
         from sqlalchemy import select
         from app.db.models import RegisteredFace
-        from app.db.postgres import AsyncSessionLocal
+        from app.db.postgres import WorkerAsyncSessionLocal
 
         async def _q() -> list[tuple[str, np.ndarray]]:
-            async with AsyncSessionLocal() as session:
+            async with WorkerAsyncSessionLocal() as session:
                 result = await session.execute(
                     select(RegisteredFace).where(
                         RegisteredFace.face_embedding.is_not(None)
@@ -411,6 +420,24 @@ class _PersonReIDMatcher:
         tensor = self._preprocess(img).unsqueeze(0)
         with torch.no_grad():
             feat = self._encoder(tensor)
+            feat = feat / feat.norm(dim=-1, keepdim=True)
+        return feat.squeeze(0).cpu().numpy()
+
+    def embed_frame(self, frame: np.ndarray) -> np.ndarray | None:
+        """Compute a normalised 512-dim CLIP embedding for a full BGR frame (Phase 8)."""
+        from PIL import Image
+        img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        tensor = self._preprocess(img).unsqueeze(0)
+        with torch.no_grad():
+            feat = self._encoder(tensor)
+            feat = feat / feat.norm(dim=-1, keepdim=True)
+        return feat.squeeze(0).cpu().numpy()
+
+    def encode_text(self, query: str) -> np.ndarray:
+        """Encode a text query into a normalised 512-dim CLIP embedding (Phase 8)."""
+        tokens = self._tokenizer([query])
+        with torch.no_grad():
+            feat = self._model.encode_text(tokens)
             feat = feat / feat.norm(dim=-1, keepdim=True)
         return feat.squeeze(0).cpu().numpy()
 
@@ -744,6 +771,78 @@ def load_models() -> None:
     reid_thread = threading.Thread(target=_reid_worker_loop, daemon=True, name="reid-0")
     reid_thread.start()
     log.info("Started re-ID worker thread (CLIP decoupled from YOLO)")
+
+    embed_thread = threading.Thread(target=_frame_embed_worker_loop, daemon=True, name="embed-0")
+    embed_thread.start()
+    log.info("Started frame embed worker thread (Phase 8 CLIP search)")
+
+
+def submit_frame_for_embedding(cam_id: str, frame: np.ndarray, timestamp: str) -> None:
+    """Queue a frame for CLIP embedding (Phase 8). Overwrite semantics — no backlog."""
+    with _frame_embed_lock:
+        _frame_embed_slots[cam_id] = (timestamp, frame)
+    _frame_embed_event.set()
+
+
+def encode_text_query(query: str) -> np.ndarray | None:
+    """Encode a NL query with the CLIP text encoder. Returns None if model not ready."""
+    if _face_recognizer is None:
+        return None
+    return _face_recognizer.encode_text(query)
+
+
+def _frame_embed_worker_loop() -> None:
+    """
+    Daemon thread: drains _frame_embed_slots, runs CLIP image encoder on each frame,
+    saves JPEG to disk, writes ClipEmbedding row to Postgres.
+    Runs independently from YOLO and re-ID workers.
+    """
+    import asyncio
+    from pathlib import Path
+    from app.db.models import ClipEmbedding
+    from app.db.postgres import WorkerAsyncSessionLocal
+
+    async def _write(cam_id: str, ts_naive: datetime, frame_path: str, emb: list[float]) -> None:
+        async with WorkerAsyncSessionLocal() as session:
+            async with session.begin():
+                session.add(ClipEmbedding(
+                    camera_id=cam_id,
+                    timestamp=ts_naive,
+                    frame_path=frame_path,
+                    embedding=emb,
+                ))
+
+    while True:
+        _frame_embed_event.wait(timeout=5.0)
+        _frame_embed_event.clear()
+
+        with _frame_embed_lock:
+            slots = list(_frame_embed_slots.items())
+            _frame_embed_slots.clear()
+
+        for cam_id, (timestamp_str, frame) in slots:
+            if _face_recognizer is None:
+                continue
+            emb = _face_recognizer.embed_frame(frame)
+            if emb is None:
+                continue
+
+            # Save frame JPEG
+            frame_dir = Path(settings.FRAME_STORE) / cam_id
+            frame_dir.mkdir(parents=True, exist_ok=True)
+            safe_ts = timestamp_str.replace(":", "-").replace(".", "-").replace("+", "")
+            frame_path = frame_dir / f"{safe_ts}.jpg"
+            cv2.imwrite(str(frame_path), frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+
+            # Write embedding to DB
+            try:
+                ts = datetime.fromisoformat(timestamp_str).replace(tzinfo=None)
+            except ValueError:
+                ts = datetime.now(timezone.utc).replace(tzinfo=None)
+            try:
+                asyncio.run(_write(cam_id, ts, str(frame_path), emb.tolist()))
+            except Exception as exc:
+                log.warning("Frame embed DB write failed for %s: %s", cam_id, exc)
 
 
 def models_ready() -> bool:

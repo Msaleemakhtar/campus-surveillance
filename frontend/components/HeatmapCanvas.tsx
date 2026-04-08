@@ -75,12 +75,11 @@ interface Props {
 
 export function HeatmapCanvas({ blobs, className }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const blobsRef = useRef<HeatBlob[]>(blobs)
   // Cache stamp per radius size
   const stampRef = useRef<{ radius: number; stamp: ImageData } | null>(null)
 
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
+  function draw(canvas: HTMLCanvasElement, currentBlobs: HeatBlob[]) {
     const ctx = canvas.getContext("2d", { willReadFrequently: true })
     if (!ctx) return
 
@@ -98,7 +97,7 @@ export function HeatmapCanvas({ blobs, className }: Props) {
     // ── 1. Accumulate intensity into a Float32 buffer ────────────────────────
     const intensity = new Float32Array(W * H)
 
-    for (const blob of blobs) {
+    for (const blob of currentBlobs) {
       const bx = Math.round((blob.x / 100) * W)
       const by = Math.round((blob.y / 100) * H)
       const x0 = bx - radius
@@ -139,21 +138,32 @@ export function HeatmapCanvas({ blobs, className }: Props) {
     }
 
     ctx.putImageData(output, 0, 0)
+  }
+
+  // Redraw whenever blobs change
+  useEffect(() => {
+    blobsRef.current = blobs
+    const canvas = canvasRef.current
+    if (canvas) draw(canvas, blobs)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blobs])
 
-  // Keep canvas pixel dimensions in sync with display size
+  // Keep canvas pixel dimensions in sync with display size, redraw after resize
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     const ro = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect
-      if (canvas.width !== width || canvas.height !== height) {
+      if (canvas.width !== Math.round(width) || canvas.height !== Math.round(height)) {
         canvas.width  = Math.round(width)
         canvas.height = Math.round(height)
+        // Canvas was cleared by the dimension change — redraw with current blobs
+        draw(canvas, blobsRef.current)
       }
     })
     ro.observe(canvas)
     return () => ro.disconnect()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return (

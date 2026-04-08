@@ -29,9 +29,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from app.core import annotator, local_inference
+from app.core import annotator, heatmap as heatmap_mod, local_inference, zones as zones_mod
 from app.core.config import settings
-from app.db.models import Incident
+from app.db.models import DetectedPerson, Incident, ZoneCount
 from app.db.postgres import AsyncSessionLocal
 from app.db.redis_client import get_redis
 from app.models.schemas import Alert, InferResponse, Track, WSMessage
@@ -124,6 +124,10 @@ class CameraPipeline:
         self._frame_offset = random.randint(0, max(1, settings.INFER_EVERY_N_FRAMES - 1))
         # Phase 3: per-track extrapolation state
         self._extrap: dict[int, _TrackState] = {}
+        # Phase 6: throttle zone_count DB writes to once every 30 s per camera
+        self._last_zone_persist: float = 0.0
+        # Phase 8: throttle frame embedding to once every 2 s per camera
+        self._last_embed_submit: float = 0.0
 
     def start(self) -> None:
         self._running = True
@@ -234,7 +238,8 @@ class CameraPipeline:
         if not local_inference.has_subscribers(self.cam_id):
             return
 
-        timestamp = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
+        timestamp = now.isoformat()
         after_hours = _is_after_hours()
 
         # ── 1. Submit frame for inference ─────────────────────────────────────
@@ -250,12 +255,49 @@ class CameraPipeline:
                 self._last_result = result
                 self._last_result_time = float(result_frame_idx)
                 await self._persist_alerts(result.alerts)
+                # Phase 6: persist each detected person (fire-and-forget)
+                asyncio.create_task(
+                    self._persist_detected_persons(result.tracks, now),
+                    name=f"persist-persons-{self.cam_id}",
+                )
 
         # ── 3. Render — extrapolate each track to the current moment ──────────
         extrap_tracks = self._extrapolate(frame.shape, frame_count)
         annotated = annotator.annotate(frame, extrap_tracks)
 
-        # ── 4. Encode + publish ───────────────────────────────────────────────
+        # ── 4. Compute zone counts from current visible tracks ────────────────
+        zone_counts: dict[str, int] = {}
+        centers: list[tuple[int, int]] = []
+        for t in extrap_tracks:
+            x, y, w, h = t.bbox
+            cx, cy = x + w // 2, y + h // 2
+            centers.append((cx, cy))
+            zone = zones_mod.get_zone_for_point(self.cam_id, cx, cy)
+            if zone:
+                zone_counts[zone] = zone_counts.get(zone, 0) + 1
+
+        # Phase 7: feed server-side heatmap accumulator
+        heatmap_mod.get_generator(self.cam_id).update(centers)
+
+        # Phase 8: submit raw frame for CLIP embedding every 2 s,
+        # but only when at least one person is currently visible.
+        # Indexing empty-scene frames pollutes the search results with
+        # frames that contain no people (CLIP would rank them semantically
+        # close to people-queries but show blank backgrounds).
+        mono = time.monotonic()
+        if mono - self._last_embed_submit >= 2.0 and self._last_result.tracks:
+            self._last_embed_submit = mono
+            local_inference.submit_frame_for_embedding(self.cam_id, frame.copy(), timestamp)
+
+        # Phase 6: persist zone counts at most once every 30 s per camera
+        if zone_counts and mono - self._last_zone_persist >= 30.0:
+            self._last_zone_persist = mono
+            asyncio.create_task(
+                self._persist_zone_counts(zone_counts, now),
+                name=f"persist-zones-{self.cam_id}",
+            )
+
+        # ── 5. Encode + publish ───────────────────────────────────────────────
         final_b64 = await asyncio.to_thread(
             _encode_frame, annotated, settings.JPEG_QUALITY
         )
@@ -267,7 +309,7 @@ class CameraPipeline:
             frame=final_b64,
             tracks=extrap_tracks,
             alerts=self._last_result.alerts,
-            zone_counts={},
+            zone_counts=zone_counts,
             heatmap=None,
         )
         await self._publish(msg)
@@ -376,6 +418,50 @@ class CameraPipeline:
             log.debug("Persisted %d alert(s) for %s", len(alerts), self.cam_id)
         except Exception as exc:
             log.warning("Failed to persist alerts for %s: %s", self.cam_id, exc)
+
+    async def _persist_detected_persons(self, tracks: list[Track], now: datetime) -> None:
+        """Write one DetectedPerson row per track. Called fire-and-forget on each new YOLO result."""
+        if not tracks:
+            return
+        now_naive = now.replace(tzinfo=None)
+        try:
+            async with AsyncSessionLocal() as session:
+                async with session.begin():
+                    for t in tracks:
+                        x, y, w, h = t.bbox
+                        session.add(DetectedPerson(
+                            track_id=t.track_id,
+                            camera_id=self.cam_id,
+                            timestamp=now_naive,
+                            bbox_x=x,
+                            bbox_y=y,
+                            bbox_w=w,
+                            bbox_h=h,
+                            is_authorized=(t.status == "AUTHORIZED"),
+                            matched_person_id=None,   # person_id not propagated through re-ID yet
+                            confidence=t.confidence,
+                            behavior=t.behavior,
+                        ))
+            log.debug("Persisted %d detections for %s", len(tracks), self.cam_id)
+        except Exception as exc:
+            log.warning("Failed to persist detections for %s: %s", self.cam_id, exc)
+
+    async def _persist_zone_counts(self, zone_counts: dict[str, int], now: datetime) -> None:
+        """Write one ZoneCount row per zone. Throttled to once per 30 s per camera."""
+        now_naive = now.replace(tzinfo=None)
+        try:
+            async with AsyncSessionLocal() as session:
+                async with session.begin():
+                    for zone_name, count in zone_counts.items():
+                        session.add(ZoneCount(
+                            camera_id=self.cam_id,
+                            zone_name=zone_name,
+                            person_count=count,
+                            congestion_score=min(count / 10.0, 1.0),
+                        ))
+            log.debug("Persisted zone counts for %s: %s", self.cam_id, zone_counts)
+        except Exception as exc:
+            log.warning("Failed to persist zone counts for %s: %s", self.cam_id, exc)
 
     async def _publish(self, msg: WSMessage) -> None:
         try:

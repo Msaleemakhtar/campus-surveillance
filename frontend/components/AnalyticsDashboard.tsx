@@ -6,8 +6,9 @@ import { HeatmapCanvas, type HeatBlob } from "@/components/HeatmapCanvas"
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 
-const CAM_COL: Record<string, number> = { cam01: 0, cam02: 0.5, cam03: 1, cam04: 1.5, cam11: 0, cam15: 0.5, cam19: 1, cam20: 1.5 }
-const CAM_ROW: Record<string, number> = { cam01: 0, cam02: 0,   cam03: 0, cam04: 0,   cam11: 1, cam15: 1,   cam19: 1, cam20: 1 }
+// Column indices 0–3 map to x-quadrants 0-25%, 25-50%, 50-75%, 75-100% via col/4
+const CAM_COL: Record<string, number> = { cam01: 0, cam02: 1, cam03: 2, cam04: 3, cam11: 0, cam15: 1, cam19: 2, cam20: 3 }
+const CAM_ROW: Record<string, number> = { cam01: 0, cam02: 0, cam03: 0, cam04: 0, cam11: 1, cam15: 1, cam19: 1, cam20: 1 }
 
 interface Responder { initials: string; name: string; status: string; color: string }
 
@@ -134,7 +135,7 @@ export function AnalyticsDashboard() {
       </div>
 
       {/* ══ RIGHT: sidebar ══════════════════════════════════════════════════ */}
-      <div className="flex flex-col gap-3 min-h-0 overflow-hidden">
+      <div className="flex flex-col gap-3 min-h-0 overflow-y-auto" style={{ scrollbarWidth: "thin", scrollbarColor: "#e2e8f0 transparent" }}>
 
         {/* Section label — mirrors left column header for vertical alignment */}
         <div className="flex items-center justify-between shrink-0">

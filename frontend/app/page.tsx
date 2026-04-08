@@ -13,6 +13,9 @@ export default function Home() {
           <Link href="/analytics" className="text-gray-500 text-xs hover:text-gray-300 transition-colors">
             Analytics →
           </Link>
+          <Link href="/search" className="text-gray-500 text-xs hover:text-gray-300 transition-colors">
+            Search →
+          </Link>
         </nav>
       </div>
 

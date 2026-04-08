@@ -10,6 +10,9 @@ export default function AnalyticsPage() {
           <Link href="/" className="text-slate-400 text-xs hover:text-slate-600 transition-colors">
             ← Live Feed
           </Link>
+          <Link href="/search" className="text-slate-400 text-xs hover:text-slate-600 transition-colors">
+            Search
+          </Link>
           <span className="text-indigo-600 text-xs border-b border-indigo-400 pb-0.5 font-medium">Analytics</span>
         </nav>
       </div>

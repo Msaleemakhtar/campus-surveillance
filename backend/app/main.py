@@ -4,12 +4,15 @@ import asyncio
 import concurrent.futures
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
-from app.api import analytics, faces, stream
+from app.api import analytics, faces, search, stream
 from app.core import local_inference
+from app.core.config import settings
 from app.core.pipeline import start_pipelines, stop_pipelines
 from app.db.redis_client import close_redis
 
@@ -53,6 +56,12 @@ app.add_middleware(
 app.include_router(stream.router)
 app.include_router(faces.router)
 app.include_router(analytics.router)
+app.include_router(search.router)
+
+# Serve saved frame JPEGs for the search results UI
+_frame_store = Path(settings.FRAME_STORE)
+_frame_store.mkdir(parents=True, exist_ok=True)
+app.mount("/frames", StaticFiles(directory=str(_frame_store)), name="frames")
 
 
 @app.get("/health")
