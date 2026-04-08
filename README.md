@@ -13,7 +13,7 @@ No cloud GPU. No ngrok. No external inference server. Everything runs on an Inte
 ```mermaid
 flowchart TD
     %% ── Video sources ──────────────────────────────────────────────────────
-    subgraph SRC["📁  Video Sources  (disk)"]
+    subgraph SRC["Video Sources  (disk)"]
         direction LR
         V1["cam01–04 · cam15\nnormal/ MP4s"]
         V2["cam11\noutdoor/ AVI"]
@@ -21,7 +21,7 @@ flowchart TD
     end
 
     %% ── asyncio event loop ─────────────────────────────────────────────────
-    subgraph LOOP["⚙️  asyncio event loop  —  uvicorn main thread"]
+    subgraph LOOP["asyncio event loop  —  uvicorn main thread"]
         direction TB
 
         subgraph PL["CameraPipeline  ×8  (one asyncio.Task per camera)"]
@@ -73,7 +73,7 @@ flowchart TD
     end
 
     %% ── daemon threads ─────────────────────────────────────────────────────
-    subgraph THR["🔧  Daemon Threads  (local_inference.py)"]
+    subgraph THR["Daemon Threads  (local_inference.py)"]
         direction TB
 
         subgraph YW["YOLO Worker Thread  ×1  (_worker_loop)"]
@@ -115,14 +115,14 @@ flowchart TD
     end
 
     %% ── storage ────────────────────────────────────────────────────────────
-    subgraph STORE["🗄️  Persistence"]
+    subgraph STORE["Persistence"]
         RD[("Redis 7\npub/sub\ncam:{cam_id} channels")]
         PG[("PostgreSQL 16 + pgvector\nregistered_faces\ndetected_persons\nincidents\nzone_counts\nclip_embeddings")]
         FS["Frame Store\nbackend/frame_store/\n{cam_id}/{ts}.jpg"]
     end
 
     %% ── frontend ───────────────────────────────────────────────────────────
-    subgraph FE["🖥️  Next.js 14  Frontend"]
+    subgraph FE["Next.js 14  Frontend"]
         direction LR
         F1["/ — Live Feed\nCameraFeed per cam\nWebSocket consumer\n10 FPS annotated stream"]
         F2["/analytics — Dashboard\nKPI cards · heatmap canvas\nincident timeline\nresponse team roster"]
@@ -153,31 +153,6 @@ flowchart TD
     E4 --> PG
 
     FC -->|"reload_faces\nre-query registered_faces"| PG
-
-    %% ── styles ─────────────────────────────────────────────────────────────
-    classDef video      fill:#1c1917,stroke:#78716c,color:#e7e5e4
-    classDef pipeline   fill:#0f172a,stroke:#3b82f6,color:#bfdbfe
-    classDef yolo       fill:#1a0a00,stroke:#f97316,color:#fed7aa
-    classDef reid       fill:#1a0033,stroke:#a855f7,color:#e9d5ff
-    classDef embed      fill:#0a1a1a,stroke:#06b6d4,color:#cffafe
-    classDef redis      fill:#1a0000,stroke:#ef4444,color:#fecaca
-    classDef postgres   fill:#00150a,stroke:#22c55e,color:#bbf7d0
-    classDef filestore  fill:#1a1a00,stroke:#eab308,color:#fef9c3
-    classDef api        fill:#0f1629,stroke:#60a5fa,color:#dbeafe
-    classDef frontend   fill:#001a0d,stroke:#34d399,color:#d1fae5
-    classDef decision   fill:#1a1200,stroke:#fbbf24,color:#fef3c7
-
-    class V1,V2,V3 video
-    class PL1,PL3,PL4,PL5,PL6,PL7,PL8,PL9,PL10,PL11,PL12,PL_DB1,PL_DB2,PL_DB3 pipeline
-    class Y1,Y2,Y3,Y4,Y5,Y6,Y7,Y8,Y9 yolo
-    class R1,R2,R3,R4 reid
-    class E1,E2,E3,E4 embed
-    class RD redis
-    class PG postgres
-    class FS filestore
-    class WS,AN,INC,SR,FC,HE,SM api
-    class F1,F2,F3 frontend
-    class PL2 decision
 ```
 
 ### Shared-State & Thread Interaction
@@ -233,19 +208,6 @@ flowchart LR
     RST -->|"analytics_heartbeat"| AH
     RST -->|"get_analytics_summary\nreads _trackers in-memory"| TRK
     RST -->|"get_recent_incidents\nreads rolling buffer"| AHI
-
-    %% ── styles ──────────────────────────────────────────────────────────────
-    classDef ev      fill:#0f172a,stroke:#3b82f6,color:#bfdbfe
-    classDef state   fill:#1c1400,stroke:#f59e0b,color:#fef3c7
-    classDef yolo    fill:#1a0a00,stroke:#f97316,color:#fed7aa
-    classDef reid    fill:#1a0033,stroke:#a855f7,color:#e9d5ff
-    classDef embed   fill:#0a1a1a,stroke:#06b6d4,color:#cffafe
-
-    class CAM,WSH,RST,AH ev
-    class PEND,RES,SUBSC,RPRI,RREF,FEMB,AHI,TRK state
-    class YT yolo
-    class RT reid
-    class ET embed
 ```
 
 ### Database Schema
