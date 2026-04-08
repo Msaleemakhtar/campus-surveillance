@@ -95,6 +95,7 @@ export function NLSearchBar() {
               <div key={i} className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
                 {/* padding-top 56.25% = 9/16 forces 16:9 landscape regardless of source frame dimensions */}
                 <div className="relative w-full bg-black" style={{ paddingTop: "56.25%" }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={`${API}${r.frame_url}`}
                     alt={`${r.cam_id} at ${r.timestamp}`}
@@ -116,7 +117,7 @@ export function NLSearchBar() {
       {/* Empty state */}
       {!searched && !loading && (
         <div className="flex-1 flex flex-col items-center justify-center text-center gap-2">
-          <p className="text-slate-400 text-sm">Type a description of what you're looking for.</p>
+          <p className="text-slate-400 text-sm">Type a description of what you&apos;re looking for.</p>
           <p className="text-slate-300 text-xs">
             CLIP matches frame content semantically — no exact keywords needed.
           </p>
