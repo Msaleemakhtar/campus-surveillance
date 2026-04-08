@@ -8,7 +8,6 @@ export class CameraWebSocket {
   private ws: WebSocket | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private readonly reconnectDelay = 3000
-
   constructor(
     private readonly camId: string,
     private readonly onMessage: MessageHandler,

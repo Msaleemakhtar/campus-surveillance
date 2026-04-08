@@ -12,6 +12,8 @@ class Track(BaseModel):
     zone: Optional[str] = None
     confidence: float = 0.0
     behavior: Optional[str] = None   # "loitering" | "running" | "fighting"
+    vx: float = 0.0          # horizontal velocity (px/s)
+    vy: float = 0.0          # vertical velocity (px/s)
 
 
 class Alert(BaseModel):
@@ -24,6 +26,7 @@ class Alert(BaseModel):
 class WSMessage(BaseModel):
     cam_id: str
     timestamp: str
+    frame_idx: int = 0
     frame: str               # base64 JPEG
     tracks: list[Track] = []
     alerts: list[Alert] = []
@@ -33,11 +36,13 @@ class WSMessage(BaseModel):
 
 class InferRequest(BaseModel):
     cam_id: str
+    frame_idx: int = 0
     frame: str               # base64 JPEG
     timestamp: str
 
 
 class InferResponse(BaseModel):
+    frame_idx: int = 0
     tracks: list[Track] = []
     alerts: list[Alert] = []
     zone_counts: dict[str, int] = {}

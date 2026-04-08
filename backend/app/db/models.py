@@ -1,7 +1,7 @@
 from datetime import datetime
 
 import sqlalchemy as sa
-from pgvector.sqlalchemy import Vector
+from pgvector.sqlalchemy import Vector  # noqa: F401 — used by RegisteredFace.face_embedding
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.postgres import Base
@@ -14,7 +14,8 @@ class RegisteredFace(Base):
     person_id: Mapped[str] = mapped_column(sa.String(64), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(sa.String(128), nullable=False)
     role: Mapped[str] = mapped_column(sa.String(32), nullable=False)   # "student" | "staff"
-    photo_path: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    photo_path: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    face_embedding: Mapped[list[float] | None] = mapped_column(Vector(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(server_default=sa.func.now())
 
 

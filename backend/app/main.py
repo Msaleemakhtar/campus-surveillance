@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import stream
+from app.api import analytics, faces, stream
 from app.core import local_inference
 from app.core.pipeline import start_pipelines, stop_pipelines
 from app.db.redis_client import close_redis
@@ -51,8 +51,14 @@ app.add_middleware(
 )
 
 app.include_router(stream.router)
+app.include_router(faces.router)
+app.include_router(analytics.router)
 
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "models_ready": local_inference.models_ready()}
+    return {
+        "status": "ok",
+        "models_ready": local_inference.models_ready(),
+        "subscribers": local_inference.subscriber_counts(),
+    }

@@ -13,6 +13,7 @@ interface UseCameraFeedResult {
 export function useCameraFeed(camId: string): UseCameraFeedResult {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wsRef = useRef<CameraWebSocket | null>(null)
+  const imgRef = useRef<HTMLImageElement | null>(null)
   const [lastMessage, setLastMessage] = useState<WSMessage | null>(null)
   const [connected, setConnected] = useState(false)
 
@@ -22,9 +23,12 @@ export function useCameraFeed(camId: string): UseCameraFeedResult {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
-    const img = new Image()
+    if (!imgRef.current) {
+      imgRef.current = new Image()
+    }
+    const img = imgRef.current
+
     img.onload = () => {
-      // Resize canvas to match frame on first draw
       if (canvas.width !== img.width || canvas.height !== img.height) {
         canvas.width = img.width
         canvas.height = img.height
@@ -50,6 +54,7 @@ export function useCameraFeed(camId: string): UseCameraFeedResult {
     return () => {
       ws.disconnect()
       wsRef.current = null
+      imgRef.current = null
     }
   }, [camId, handleMessage])
 

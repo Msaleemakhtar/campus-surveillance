@@ -6,7 +6,7 @@ from app.models.schemas import Track
 _STATUS_COLOR: dict[str, tuple[int, int, int]] = {
     "AUTHORIZED":   (87, 197, 34),    # green
     "UNAUTHORIZED": (68, 68, 239),    # red
-    "UNKNOWN":      (34, 197, 87),     # green
+    "UNKNOWN":      (0, 100, 255),     # orange-red
 }
 _DEFAULT_COLOR = (200, 200, 200)
 

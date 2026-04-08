@@ -163,6 +163,7 @@ velocity_cap = 600    # px/s — walking person at 640px wide is ~100px/s max
 ---
 
 ### Phase 5 — Face Recognition + Alerts ⬜
+
 **Goal:** Known persons show name; unauthorized triggers alert; after-hours and loitering detected.
 
 **What to add:**

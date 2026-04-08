@@ -16,5 +16,15 @@ class Settings(BaseSettings):
 
     VIDEOS_BASE: str = "/home/salim/Desktop/campus-survelliance/videos"
 
+    # Alert cooldowns (seconds) — how often the same alert type can fire per track
+    ALERT_COOLDOWN_LOITERING: float = 60.0
+    ALERT_COOLDOWN_RUNNING: float = 10.0
+    ALERT_COOLDOWN_UNAUTHORIZED: float = 120.0
+    ALERT_COOLDOWN_AFTER_HOURS: float = 300.0
+
+    # Re-ID crop quality filters
+    REID_MIN_CROP_PX: int = 40        # min(w, h) must be at least this many pixels
+    REID_MAX_ASPECT_RATIO: float = 2.0  # w/h above this → horizontal blob, skip
+
 
 settings = Settings()

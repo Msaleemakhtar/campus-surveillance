@@ -6,6 +6,8 @@ export interface Track {
   zone: string | null
   confidence: number
   behavior: string | null
+  vx: number
+  vy: number
 }
 
 export interface Alert {
@@ -18,6 +20,7 @@ export interface Alert {
 export interface WSMessage {
   cam_id: string
   timestamp: string
+  frame_idx: number
   frame: string           // base64 JPEG
   tracks: Track[]
   alerts: Alert[]

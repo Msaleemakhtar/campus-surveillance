@@ -4,6 +4,7 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
+from app.core.local_inference import add_subscriber, remove_subscriber
 from app.core.pipeline import ALL_CAMERAS
 from app.db.redis_client import get_redis
 
@@ -18,6 +19,7 @@ async def stream(websocket: WebSocket, cam_id: str) -> None:
         return
 
     await websocket.accept()
+    add_subscriber(cam_id)
     log.info("WS connected: %s", cam_id)
 
     redis = await get_redis()
@@ -42,6 +44,7 @@ async def stream(websocket: WebSocket, cam_id: str) -> None:
             await listen_task
         except asyncio.CancelledError:
             pass
+        remove_subscriber(cam_id)
         await pubsub.unsubscribe(f"cam:{cam_id}")
         try:
             await pubsub.aclose()
