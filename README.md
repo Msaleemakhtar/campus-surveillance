@@ -12,121 +12,240 @@ No cloud GPU. No ngrok. No external inference server. Everything runs on an Inte
 
 ```mermaid
 flowchart TD
-    subgraph VideoSources["Video Sources (disk)"]
-        V1[cam01–04 · cam15\nnormal MP4s]
-        V2[cam11\noutdoor AVI]
-        V3[cam19 · cam20\nanomaly playlists]
+    %% ── Video sources ──────────────────────────────────────────────────────
+    subgraph SRC["📁  Video Sources  (disk)"]
+        direction LR
+        V1["cam01–04 · cam15\nnormal/ MP4s"]
+        V2["cam11\noutdoor/ AVI"]
+        V3["cam19 · cam20\nanomaly/ playlists\n(Fighting · Vandalism …)"]
     end
 
-    subgraph Pipeline["CameraPipeline  ×8  (asyncio.Task)"]
+    %% ── asyncio event loop ─────────────────────────────────────────────────
+    subgraph LOOP["⚙️  asyncio event loop  —  uvicorn main thread"]
         direction TB
-        PL_READ[Read frame\nOpenCV VideoCapture]
-        PL_SUB{Subscribers\n> 0?}
-        PL_SUBMIT[submit_frame\nnon-blocking dict write]
-        PL_RESULT[get_latest_result\nnon-blocking dict read]
-        PL_EXTRAP[Extrapolate bounding boxes\nintegral velocity decay]
-        PL_ANNOTATE[Annotate JPEG\nOpenCV server-side burn-in]
-        PL_PUBLISH[Publish to Redis\npub/sub channel]
-        PL_ZONE[Zone assignment\n+ heatmap accumulator]
-        PL_DB[(DB writes\nincidents · detected_persons\nzone_counts  fire-and-forget)]
 
-        PL_READ --> PL_SUB
-        PL_SUB -- yes --> PL_SUBMIT
-        PL_SUB -- no  --> PL_READ
-        PL_SUBMIT --> PL_RESULT
-        PL_RESULT --> PL_EXTRAP
-        PL_EXTRAP --> PL_ANNOTATE
-        PL_ANNOTATE --> PL_PUBLISH
-        PL_RESULT --> PL_ZONE
-        PL_ZONE --> PL_DB
+        subgraph PL["CameraPipeline  ×8  (one asyncio.Task per camera)"]
+            direction TB
+            PL1["① Read frame\nOpenCV VideoCapture\n→ asyncio.to_thread"]
+            PL2{"② has_subscribers?\n_subscriber_counts dict"}
+            PL3["③ submit_frame\nwrite _pending[cam_id]\n(overwrite — always freshest)"]
+            PL4["④ get_latest_result\nread _results[cam_id]\n(non-blocking dict read)"]
+            PL5["⑤ _update_extrap\nstore track velocity state"]
+            PL6["⑥ _extrapolate\nproject bbox forward\nintegral velocity decay"]
+            PL7["⑦ annotator.annotate\nOpenCV server-side burn-in\n(green/orange/red boxes)"]
+            PL8["⑧ zone assignment\n+ heatmap accumulator\nheatmap_mod.get_generator"]
+            PL9{"⑨ 2 s elapsed\n+ tracks visible?"}
+            PL10["⑩ submit_frame_for_embedding\nwrite _frame_embed_slots[cam_id]"]
+            PL11["⑪ _encode_frame\nJPEG → base64\nasynco.to_thread"]
+            PL12["⑫ redis.publish\ncam:{cam_id} channel\nWSMessage JSON"]
+            PL_DB1[["fire-and-forget\n_persist_alerts\n→ incidents table"]]
+            PL_DB2[["fire-and-forget\n_persist_detected_persons\n→ detected_persons table"]]
+            PL_DB3[["throttled 30 s\n_persist_zone_counts\n→ zone_counts table"]]
+
+            PL1 --> PL2
+            PL2 -- "no → sleep 0.5 s" --> PL1
+            PL2 -- yes --> PL3
+            PL3 -.->|"async, non-blocking"| PL4
+            PL4 --> PL5
+            PL5 --> PL_DB1
+            PL5 --> PL_DB2
+            PL5 --> PL6
+            PL6 --> PL7
+            PL7 --> PL8
+            PL8 --> PL_DB3
+            PL8 --> PL9
+            PL9 -- yes --> PL10
+            PL9 -- no --> PL11
+            PL10 --> PL11
+            PL11 --> PL12
+        end
+
+        subgraph API["FastAPI  REST  +  WebSocket"]
+            direction TB
+            WS["WS  /ws/stream/{cam_id}\nsubscriber add/remove\nstream annotated JPEGs"]
+            AN["GET  /analytics/summary\nreads in-memory _trackers\n+ _alert_history deque"]
+            INC["GET  /analytics/incidents\nreads _alert_history deque\n(maxlen=200 rolling buffer)"]
+            SR["GET  /search?query=\nCLIP text encode\n→ pgvector cosine distance"]
+            FC["POST  /faces/reload\nhot-reload CLIP embeddings\nfrom registered_faces table"]
+            HE["GET  /health\nmodels_ready · subscriber counts"]
+            SM["GET  /frames/{cam}/{file}\nstatic JPEG mount\nfor search thumbnails"]
+        end
     end
 
-    subgraph Inference["local_inference.py  (daemon threads)"]
+    %% ── daemon threads ─────────────────────────────────────────────────────
+    subgraph THR["🔧  Daemon Threads  (local_inference.py)"]
         direction TB
-        YW["YOLO worker thread  ×1\nYOLOv8n  imgsz=416  conf=0.20\n~291 ms / call on i5-8250U"]
-        CT["_CentroidTracker  per camera\nHungarian assignment\nEMA velocity · edge expiry"]
-        RW["CLIP Re-ID worker thread  ×1\nCLIP ViT-B/32  512-dim cosine\nper-(cam_id, track_id) slot"]
-        FW["Frame embed worker thread  ×1\nCLIP image encoder\n1 frame / 2 s per camera"]
 
-        YW --> CT
-        CT --> RW
-        CT --> FW
+        subgraph YW["YOLO Worker Thread  ×1  (_worker_loop)"]
+            direction TB
+            Y1["_pop_next\npop _pending dict\n(one camera at a time)"]
+            Y2["YOLOv8n\nimgsz=416  conf=0.20  iou=0.35\nclasses=[0]  ~291 ms/call"]
+            Y3["_deduplicate_boxes\nremove partial-body detections\n(centroid-inside-larger check)"]
+            Y4["_CentroidTracker.update\nHungarian assignment\nEMA velocity  α=0.9\nedge expiry  max_age=40/60"]
+            Y5["behavior detection\nLOITERING > 120 s\nRUNNING > 18 px/frame"]
+            Y6["alert generation\nafter-hours check\ncooldown dedup"]
+            Y7["write _results[cam_id]\n(InferResponse, frame_idx)"]
+            Y8["append _alert_history\nrolling deque maxlen=200"]
+            Y9["_submit_reid\nwrite _reid_priority or\n_reid_refresh dict"]
+
+            Y1 --> Y2 --> Y3 --> Y4 --> Y5 --> Y6 --> Y7
+            Y6 --> Y8
+            Y4 --> Y9
+        end
+
+        subgraph RW["CLIP Re-ID Worker Thread  ×1  (_reid_worker_loop)"]
+            direction TB
+            R1["drain _reid_priority first\nthen _reid_refresh\n(new persons get fast ID)"]
+            R2["_face_recognizer.identify\nCLIP ViT-B/32 image encode\n512-dim crop embedding"]
+            R3["cosine similarity\nvs registered_faces DB\nthreshold = 0.75"]
+            R4["write back to _ActiveTrack\nface_status · face_name\nface_confidence  (GIL)"]
+
+            R1 --> R2 --> R3 --> R4
+        end
+
+        subgraph EW["Frame Embed Worker Thread  ×1  (_frame_embed_worker_loop)"]
+            direction TB
+            E1["drain _frame_embed_slots\n(overwrite slot per camera)"]
+            E2["_face_recognizer.embed_frame\nCLIP ViT-B/32 full-frame\n512-dim embedding"]
+            E3["save JPEG\nbackend/frame_store/{cam_id}/\ntimestamp.jpg"]
+            E4["INSERT clip_embeddings\ncam_id · timestamp\nframe_path · embedding vector"]
+
+            E1 --> E2 --> E3 --> E4
+        end
     end
 
-    subgraph Storage["Persistence"]
-        PG[(PostgreSQL 16 + pgvector\nregistered_faces\ndetected_persons\nincidents\nzone_counts\nclip_embeddings\nattendance_logs\nresponders)]
-        FS[Frame Store\nbackend/frame_store/\ncam_id/timestamp.jpg]
-        RD[(Redis 7\npub/sub channels\ncam01 … cam20)]
+    %% ── storage ────────────────────────────────────────────────────────────
+    subgraph STORE["🗄️  Persistence"]
+        RD[("Redis 7\npub/sub\ncam:{cam_id} channels")]
+        PG[("PostgreSQL 16 + pgvector\nregistered_faces\ndetected_persons\nincidents\nzone_counts\nclip_embeddings")]
+        FS["Frame Store\nbackend/frame_store/\n{cam_id}/{ts}.jpg"]
     end
 
-    subgraph FastAPI["FastAPI  ·  uvicorn  ·  asyncio"]
-        WS["/ws/stream/{cam_id}\nWebSocket"]
-        AN["/analytics/summary\n/analytics/incidents\n/analytics/responders"]
-        SR["/search?query=\npgvector cosine distance"]
-        FC["/faces/reload\nhot-reload CLIP embeddings"]
-        HE["/health\nsubscriber counts"]
-        SM["/frames  static files"]
+    %% ── frontend ───────────────────────────────────────────────────────────
+    subgraph FE["🖥️  Next.js 14  Frontend"]
+        direction LR
+        F1["/ — Live Feed\nCameraFeed per cam\nWebSocket consumer\n10 FPS annotated stream"]
+        F2["/analytics — Dashboard\nKPI cards · heatmap canvas\nincident timeline\nresponse team roster"]
+        F3["/search — NL Search\ntext input → /search API\nframe thumbnail grid\n+ camera · timestamp"]
     end
 
-    subgraph Frontend["Next.js 14  ·  TypeScript  ·  Tailwind"]
-        PG_LIVE["/ — Live Feed\n8-camera grid\nCameraGrid + CameraFeed"]
-        PG_AN["  /analytics — Dashboard\nKPI cards · heatmap\nincident timeline · responders"]
-        PG_SR["/search — NL Search\ntext query → frame thumbnails"]
-    end
+    %% ── cross-subgraph edges ───────────────────────────────────────────────
+    SRC --> PL1
+    PL12 --> RD
+    RD -->|"subscribe cam:{cam_id}"| WS
+    WS -->|"annotated JPEG frames\nWSMessage JSON"| F1
+    WS -->|"add_subscriber on connect\nremove_subscriber on disconnect"| PL2
 
-    VideoSources --> Pipeline
-    Pipeline <--> Inference
-    Inference --> Storage
-    Pipeline --> RD
-    RD --> WS
-    PG --> AN
-    PG --> SR
-    WS --> PG_LIVE
-    AN --> PG_AN
-    SR --> PG_SR
-    FC --> Inference
-    FW --> FS
-    FW --> PG
-    SM --> PG_SR
+    PL3 -->|"_pending dict\n(overwrite slot)"| Y1
+    Y7 -->|"_results dict"| PL4
+    Y9 -->|"_reid_priority / _reid_refresh"| R1
+    R4 -.->|"writes _ActiveTrack fields\n→ picked up on next YOLO result"| Y4
+    PL10 -->|"_frame_embed_slots dict"| E1
+
+    AN -->|"in-memory _trackers state\n+ heatmap data"| F2
+    INC -->|"_alert_history deque"| F2
+    SR -->|"CLIP text encode\n→ pgvector <=> query"| PG
+    SR --> F3
+    SM -->|"static JPEG files"| F3
+
+    PL_DB1 & PL_DB2 & PL_DB3 -->|"async SQLAlchemy\nfire-and-forget"| PG
+    E3 --> FS
+    E4 --> PG
+
+    FC -->|"reload_faces\nre-query registered_faces"| PG
+
+    %% ── styles ─────────────────────────────────────────────────────────────
+    classDef video      fill:#1c1917,stroke:#78716c,color:#e7e5e4
+    classDef pipeline   fill:#0f172a,stroke:#3b82f6,color:#bfdbfe
+    classDef yolo       fill:#1a0a00,stroke:#f97316,color:#fed7aa
+    classDef reid       fill:#1a0033,stroke:#a855f7,color:#e9d5ff
+    classDef embed      fill:#0a1a1a,stroke:#06b6d4,color:#cffafe
+    classDef redis      fill:#1a0000,stroke:#ef4444,color:#fecaca
+    classDef postgres   fill:#00150a,stroke:#22c55e,color:#bbf7d0
+    classDef filestore  fill:#1a1a00,stroke:#eab308,color:#fef9c3
+    classDef api        fill:#0f1629,stroke:#60a5fa,color:#dbeafe
+    classDef frontend   fill:#001a0d,stroke:#34d399,color:#d1fae5
+    classDef decision   fill:#1a1200,stroke:#fbbf24,color:#fef3c7
+
+    class V1,V2,V3 video
+    class PL1,PL3,PL4,PL5,PL6,PL7,PL8,PL9,PL10,PL11,PL12,PL_DB1,PL_DB2,PL_DB3 pipeline
+    class Y1,Y2,Y3,Y4,Y5,Y6,Y7,Y8,Y9 yolo
+    class R1,R2,R3,R4 reid
+    class E1,E2,E3,E4 embed
+    class RD redis
+    class PG postgres
+    class FS filestore
+    class WS,AN,INC,SR,FC,HE,SM api
+    class F1,F2,F3 frontend
+    class PL2 decision
 ```
 
-### Thread Model
+### Shared-State & Thread Interaction
 
 ```mermaid
 flowchart LR
-    subgraph AsyncioEventLoop["asyncio event loop  (main thread)"]
-        T1[Pipeline Task · cam01]
-        T2[Pipeline Task · cam02]
-        T3[  ···  ]
-        T8[Pipeline Task · cam20]
-        WS_H[WebSocket handlers]
-        REST[REST handlers]
+    %% ── asyncio tasks ──────────────────────────────────────────────────────
+    subgraph EV["asyncio event loop  (uvicorn main thread)"]
+        direction TB
+        CAM["CameraPipeline Tasks\ncam01 · cam02 · … · cam20\n(8 concurrent asyncio.Tasks)"]
+        WSH["WebSocket Handlers\n/ws/stream/{cam_id}"]
+        RST["REST Handlers\n/analytics  /search  /faces/reload"]
+        AH["analytics_heartbeat\nkeeps inference alive\nwhile dashboard is open\n(10 s TTL)"]
     end
 
-    subgraph DaemonThreads["daemon threads"]
-        YT[YOLO worker\n_infer_loop]
-        RT[Re-ID worker\n_reid_worker_loop]
-        ET[Frame embed worker\n_frame_embed_worker_loop]
+    %% ── shared state ────────────────────────────────────────────────────────
+    subgraph SS["Shared State  (thread-safe dicts  +  GIL)"]
+        direction TB
+        PEND["_pending\ndict[cam_id → frame]\nprotected by _pending_lock\n⚡ overwrite semantics"]
+        RES["_results\ndict[cam_id → InferResponse]\nprotected by _results_lock\n⚡ overwrite semantics"]
+        SUBSC["_subscriber_counts\ndict[cam_id → int]\nprotected by _sub_lock\nalso gated by analytics TTL"]
+        RPRI["_reid_priority\ndict[(cam_id, tid) → crop]\nnew persons — processed first"]
+        RREF["_reid_refresh\ndict[(cam_id, tid) → crop]\nperiodic refresh — lower priority"]
+        FEMB["_frame_embed_slots\ndict[cam_id → (ts, frame)]\nprotected by _frame_embed_lock\n⚡ overwrite semantics"]
+        AHI["_alert_history\ndeque[dict]  maxlen=200\nrolling alert buffer\nfor analytics API"]
+        TRK["_trackers\ndict[cam_id → _CentroidTracker]\n_ActiveTrack objects\nface_status updated in-place"]
     end
 
-    subgraph SharedState["shared state  (thread-safe)"]
-        PS[_pending  dict]
-        RS[_results  dict]
-        RQ[_reid_priority\n_reid_refresh  dicts]
-        FQ[_frame_embed_slots  dict]
-        SC[_subscriber_counts  dict]
+    %% ── daemon threads ──────────────────────────────────────────────────────
+    subgraph DT["Daemon Threads"]
+        direction TB
+        YT["YOLO Worker\n_worker_loop\n① pop _pending\n② run YOLOv8n ~291 ms\n③ CentroidTracker.update\n④ write _results\n⑤ submit crops to re-ID"]
+        RT["CLIP Re-ID Worker\n_reid_worker_loop\n① drain priority then refresh\n② CLIP.identify crop\n③ write back to _ActiveTrack"]
+        ET["Frame Embed Worker\n_frame_embed_worker_loop\n① drain _frame_embed_slots\n② CLIP.embed_frame\n③ save JPEG + write DB"]
     end
 
-    T1 & T2 & T3 & T8 -->|submit_frame| PS
-    PS -->|consumed by| YT
-    YT -->|write| RS
-    RS -->|get_latest_result| T1 & T2 & T3 & T8
-    YT -->|_submit_reid| RQ
-    RQ -->|consumed by| RT
-    YT -->|submit_frame_for_embedding| FQ
-    FQ -->|consumed by| ET
-    WS_H -->|add/remove_subscriber| SC
-    T1 & T2 & T3 & T8 -->|has_subscribers| SC
+    %% ── edges ───────────────────────────────────────────────────────────────
+    CAM -->|"submit_frame\n(overwrite)"| PEND
+    PEND -->|"_pop_next"| YT
+    YT -->|"write result"| RES
+    RES -->|"get_latest_result\n(non-blocking)"| CAM
+    YT -->|"update active tracks"| TRK
+    YT -->|"_submit_reid\nis_first → priority\nperiodic → refresh"| RPRI
+    YT -->|"_submit_reid\nperiodic refresh"| RREF
+    YT -->|"append alert dicts"| AHI
+    RPRI & RREF -->|"consumed by"| RT
+    RT -->|"write face_status\nface_name · confidence"| TRK
+    CAM -->|"submit_frame_for_embedding\n(overwrite, every 2 s)"| FEMB
+    FEMB -->|"consumed by"| ET
+    WSH -->|"add_subscriber\nremove_subscriber"| SUBSC
+    CAM -->|"has_subscribers check\nbefore every frame"| SUBSC
+    AH -->|"extend analytics TTL"| SUBSC
+    RST -->|"analytics_heartbeat"| AH
+    RST -->|"get_analytics_summary\nreads _trackers in-memory"| TRK
+    RST -->|"get_recent_incidents\nreads rolling buffer"| AHI
+
+    %% ── styles ──────────────────────────────────────────────────────────────
+    classDef ev      fill:#0f172a,stroke:#3b82f6,color:#bfdbfe
+    classDef state   fill:#1c1400,stroke:#f59e0b,color:#fef3c7
+    classDef yolo    fill:#1a0a00,stroke:#f97316,color:#fed7aa
+    classDef reid    fill:#1a0033,stroke:#a855f7,color:#e9d5ff
+    classDef embed   fill:#0a1a1a,stroke:#06b6d4,color:#cffafe
+
+    class CAM,WSH,RST,AH ev
+    class PEND,RES,SUBSC,RPRI,RREF,FEMB,AHI,TRK state
+    class YT yolo
+    class RT reid
+    class ET embed
 ```
 
 ### Database Schema

@@ -26,6 +26,17 @@ build/
 frontend/node_modules/
 frontend/.next/
 
+# Internal planning / session notes
+PLAN.md
+notes.md
+
+# Claude Code internal
+.claude/
+.superpowers/
+
+# Generated frame store
+backend/frame_store/
+
 # Misc
 *.log
 .DS_Store
