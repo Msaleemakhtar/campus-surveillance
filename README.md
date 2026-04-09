@@ -6,6 +6,12 @@ No cloud GPU. No ngrok. No external inference server. Everything runs on an Inte
 
 ---
 
+## Demo
+
+<video src="v3.webm" controls width="100%"></video>
+
+---
+
 ## System Architecture
 
 ### Full Data-Flow Diagram
