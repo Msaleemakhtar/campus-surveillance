@@ -8,7 +8,9 @@ No cloud GPU. No ngrok. No external inference server. Everything runs on an Inte
 
 ## Demo
 
-<video src="https://github.com/Msaleemakhtar/campus-surveillance/releases/download/v1.0.0/v3.mp4" controls autoplay muted loop width="100%"></video>
+![Demo](demo.gif)
+
+> Full video: [Download v3.mp4](https://github.com/Msaleemakhtar/campus-surveillance/releases/download/v1.0.0/v3.mp4)
 
 ---
 
