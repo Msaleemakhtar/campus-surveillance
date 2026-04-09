@@ -8,7 +8,7 @@ No cloud GPU. No ngrok. No external inference server. Everything runs on an Inte
 
 ## Demo
 
-<video src="v3.webm" controls width="100%"></video>
+<video src="https://raw.githubusercontent.com/Msaleemakhtar/campus-surveillance/main/v3.mp4" controls autoplay muted loop width="100%"></video>
 
 ---
 
